@@ -1,0 +1,49 @@
+# ══════════════════════════════════════════════════════════════════
+#  Systemd unit files for production deployment
+#  Place in /etc/systemd/system/ and run:
+#    sudo systemctl daemon-reload
+#    sudo systemctl enable eser-api eser-bot
+#    sudo systemctl start eser-api
+#    sudo systemctl start eser-bot
+# ══════════════════════════════════════════════════════════════════
+#
+# ── eser-api.service ────────────────────────────────────────────
+# [Unit]
+# Description=Eser Shopify API (Gunicorn)
+# After=network.target
+# Wants=network-online.target
+#
+# [Service]
+# User=ubuntu
+# WorkingDirectory=/home/ubuntu/Eser
+# Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+# ExecStart=/home/ubuntu/Eser/venv/bin/gunicorn -c gunicorn.conf.py autoshopify:app
+# Restart=always
+# RestartSec=5
+# CPUQuota=200%
+# MemoryMax=8G
+# LimitNOFILE=65535
+#
+# [Install]
+# WantedBy=multi-user.target
+#
+# ── eser-bot.service ────────────────────────────────────────────
+# [Unit]
+# Description=Eser Telegram Bot
+# After=network.target eser-api.service
+# Wants=network-online.target
+#
+# [Service]
+# User=ubuntu
+# WorkingDirectory=/home/ubuntu/Eser
+# Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+# ExecStartPre=/usr/bin/curl --silent --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:5000/health
+# ExecStart=/home/ubuntu/Eser/venv/bin/python3 bot.py
+# Restart=always
+# RestartSec=10
+# CPUQuota=180%
+# MemoryMax=6G
+# LimitNOFILE=65535
+#
+# [Install]
+# WantedBy=multi-user.target
