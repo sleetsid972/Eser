@@ -83,7 +83,7 @@ MAX_CARD_RETRIES = 3               # Max retries for retryable cards before mark
 CAPTCHA_BLOCK_MINUTES = 10         # CAPTCHA sites blocked temporarily (not permanently)
 SITE_TEST_RETRIES = 2              # Retries for 503/timeout during site testing
 SITE_TEST_RETRY_DELAY = 5          # Seconds between site test retries
-SITE_TEST_CONCURRENCY_LIMIT = 15   # Semaphore limit for concurrent site testing
+SITE_TEST_CONCURRENCY_LIMIT = 8    # Semaphore limit for concurrent site testing
 PROXY_LATENCY_REFRESH_HOURS = 1    # Re-measure proxy latency every N hours
 
 # Browser user agents for general HTTP requests
@@ -1292,6 +1292,12 @@ class CardCheckerBot:
                     status = ShopifyCheckStatus.ERROR
                     retryable = True
                     site_dead = False
+                elif "MERCHANDISE_EXPECTED_PRICE_MISMATCH" in response_upper:
+                    # Price changed between product selection and payment — site config issue,
+                    # not a real card decline. Retry with a different site.
+                    status = ShopifyCheckStatus.ERROR
+                    retryable = True
+                    site_dead = True
                 elif site_dead:
                     status = ShopifyCheckStatus.ERROR
                     retryable = True
@@ -1557,6 +1563,7 @@ class CardCheckerBot:
                     "NOT_A_SHOPIFY", "STORE_CLOSED", "PASSWORD_PROTECTED",
                     "NO_PRODUCTS", "STORE_NOT_FOUND", "404",
                     "PAYMENTS_PAYMENT_FLEXIBILITY_TERMS_ID_MISMATCH",
+                    "SITE NOT SUPPORTED", "NOT SUPPORTED",
                 ]
                 for marker in dead_markers:
                     if marker in response_upper:
@@ -1566,6 +1573,7 @@ class CardCheckerBot:
                 # BAD site markers: responses that mean the site is not useful for checking
                 bad_markers = [
                     "GENERIC_ERROR", "DELIVERY_DELIVERY_LINE_DETAIL_CHANGED",
+                    "MERCHANDISE_EXPECTED_PRICE_MISMATCH",
                 ]
                 for marker in bad_markers:
                     if marker in response_upper:
@@ -1664,7 +1672,7 @@ class CardCheckerBot:
                         elif result.get("temporary"):
                             last_reason = result.get("reason", "temporary error")
                             if attempt < SITE_TEST_RETRIES:
-                                await asyncio.sleep(SITE_TEST_RETRY_DELAY)
+                                await asyncio.sleep(SITE_TEST_RETRY_DELAY * (attempt + 1))
                                 continue
                             async with results_lock:
                                 failure_reasons[site] = last_reason
@@ -1682,7 +1690,7 @@ class CardCheckerBot:
                             reason_str = last_reason.lower()
                             if any(kw in reason_str for kw in ["503", "timeout", "connection error", "429", "rate limit", "temporary"]):
                                 if attempt < SITE_TEST_RETRIES:
-                                    await asyncio.sleep(SITE_TEST_RETRY_DELAY)
+                                    await asyncio.sleep(SITE_TEST_RETRY_DELAY * (attempt + 1))
                                     continue
                             # Not a retryable error — retry once more then give up
                             if attempt == 0:
@@ -1697,7 +1705,7 @@ class CardCheckerBot:
                     except Exception as e:
                         last_reason = f"exception: {str(e)[:60]}"
                         if attempt < SITE_TEST_RETRIES:
-                            await asyncio.sleep(SITE_TEST_RETRY_DELAY)
+                            await asyncio.sleep(SITE_TEST_RETRY_DELAY * (attempt + 1))
                             continue
                         async with results_lock:
                             dead.append(site)
