@@ -87,6 +87,7 @@ SHOPIFY_TEST_CARD = "4111111111111111|12|2026|123"
 # ═══════════════ Retry / Resilience Config ═══════════════
 MAX_CARD_RETRIES = 3               # Max retries for retryable cards before marking declined
 CAPTCHA_BLOCK_MINUTES = 10         # CAPTCHA sites blocked temporarily (not permanently)
+MAX_PAYU_CONSECUTIVE_ERRORS = 5    # Stop mass job after this many consecutive PayU failures
 SITE_TEST_RETRIES = 2              # Retries for 503/timeout during site testing
 SITE_TEST_RETRY_DELAY = 5          # Seconds between site test retries
 SITE_TEST_CONCURRENCY_LIMIT = 20   # VPS-tuned: 4 vCPU / 31 GB
@@ -2237,8 +2238,17 @@ class CardCheckerBot:
         bar = '█' * filled + '░' * empty
         return f"<code>[{bar}]</code> <b>{percent:.0%}</b>"
 
-    # ═══════════════ FIX: PayU — Full 60s wait, no stuck ═══════════════
+    # ═══════════════ FIX: PayU — Full 60s wait, no stuck, full error handling ═══════════════
     async def send_card_to_payu(self, card_line: str, gateway: str = 'stripe') -> str:
+        # Guard: user_client must be initialised and connected
+        if self.user_client is None:
+            return "PayU Error: checker session not initialized — restart bot"
+        if not self.user_client.is_connected():
+            try:
+                await self.user_client.connect()
+            except Exception as conn_err:
+                return f"PayU Error: cannot connect checker session ({conn_err})"
+
         await self._rate_limit_user()
 
         if gateway == 'braintree':
@@ -2253,10 +2263,29 @@ class CardCheckerBot:
         except Exception:
             last_seen_id = 0
 
-        sent = await self.user_client.send_message(PAYU_BOT_USERNAME, cmd)
-        sent_id = sent.id
+        # Send command to PayU bot with full exception handling
+        try:
+            sent = await self.user_client.send_message(PAYU_BOT_USERNAME, cmd)
+            sent_id = sent.id
+        except errors.FloodWaitError as e:
+            wait = e.seconds
+            logger.warning(f"PayU send FloodWait {wait}s — waiting")
+            await asyncio.sleep(min(wait, 30))
+            try:
+                sent = await self.user_client.send_message(PAYU_BOT_USERNAME, cmd)
+                sent_id = sent.id
+            except Exception as retry_err:
+                return f"PayU FloodWait retry failed: {retry_err}"
+        except errors.UserDeactivatedBanError:
+            return "PayU Error: checker account banned"
+        except errors.AuthKeyUnregisteredError:
+            return "PayU Error: checker session expired — re-login required"
+        except errors.UserNotParticipantError:
+            return "PayU Error: checker not in PayU chat"
+        except Exception as e:
+            return f"PayU Send Error: {type(e).__name__}: {str(e)[:80]}"
 
-        # FIX: wait full CARD_CHECK_TIMEOUT (60s), poll every 1s
+        # Poll for PayU bot response up to CARD_CHECK_TIMEOUT
         deadline = time.time() + CARD_CHECK_TIMEOUT
 
         while time.time() < deadline:
@@ -2277,6 +2306,9 @@ class CardCheckerBot:
                     ]):
                         continue
                     return msg.text
+            except errors.FloodWaitError as e:
+                logger.warning(f"PayU poll FloodWait {e.seconds}s")
+                await asyncio.sleep(min(e.seconds, 20))
             except Exception as e:
                 logger.debug(f"PayU poll error: {e}")
                 await asyncio.sleep(1.0)
@@ -3627,6 +3659,17 @@ class CardCheckerBot:
                     self.update_user_stats(uid, approved=1)
                     fmt = await self.format_stripe_approved(args, raw)
                     await self.glowing_success(status, fmt)
+                elif raw.startswith("PayU Error:") or raw.startswith("PayU Send Error:") or raw.startswith("PayU FloodWait:"):
+                    await status.edit(
+                        "╔══════════════════════════════════════╗\n"
+                        "║  ⚠️ 𝗦𝗧𝗥𝗜𝗣𝗘 ─ 𝗣𝗔𝗬𝗨 𝗘𝗥𝗥𝗢𝗥 ⚠️           ║\n"
+                        "╚══════════════════════════════╝\n\n"
+                        f"┃ 💳 <code>{args}</code>\n"
+                        f"┃ 🔌 <code>{raw[:120]}</code>\n"
+                        f"┃ ⏰ <code>{datetime.now().strftime('%H:%M:%S')}</code>\n\n"
+                        "🟡 <b>Status:</b> <code>PAYU UNREACHABLE</code> — check checker session",
+                        parse_mode='html'
+                    )
                 else:
                     parts = args.split('|')
                     await status.edit(
@@ -3659,6 +3702,17 @@ class CardCheckerBot:
                     self.update_user_stats(uid, approved=1)
                     fmt = await self.format_braintree_auth(args, raw)
                     await self.glowing_success(status, fmt)
+                elif raw.startswith("PayU Error:") or raw.startswith("PayU Send Error:") or raw.startswith("PayU FloodWait:"):
+                    await status.edit(
+                        "╔══════════════════════════════════════╗\n"
+                        "║  ⚠️ 𝗕𝗥𝗔𝗜𝗡𝗧𝗥𝗘𝗘 ─ 𝗣𝗔𝗬𝗨 𝗘𝗥𝗥𝗢𝗥 ⚠️       ║\n"
+                        "╚══════════════════════════════╝\n\n"
+                        f"┃ 💳 <code>{args}</code>\n"
+                        f"┃ 🔌 <code>{raw[:120]}</code>\n"
+                        f"┃ ⏰ <code>{datetime.now().strftime('%H:%M:%S')}</code>\n\n"
+                        "🟡 <b>Status:</b> <code>PAYU UNREACHABLE</code> — check checker session",
+                        parse_mode='html'
+                    )
                 else:
                     parts = args.split('|')
                     await status.edit(
@@ -4105,6 +4159,7 @@ class CardCheckerBot:
                 charged_cards = []
                 declined_count = 0
                 start_time = datetime.now()
+                payu_consecutive_errors = 0   # track consecutive PayU infrastructure failures
 
                 msg = await self.safe_send_message(
                     chat_id,
@@ -4143,6 +4198,25 @@ class CardCheckerBot:
                     try:
                         if gateway in ['stripe', 'braintree']:
                             raw = await self.send_card_to_payu(card, gateway=gateway)
+                            # Detect PayU infrastructure errors (not card declines)
+                            is_payu_infra_error = raw.startswith((
+                                "PayU Error:", "PayU Send Error:", "PayU FloodWait:"
+                            ))
+                            if is_payu_infra_error:
+                                payu_consecutive_errors += 1
+                                logger.warning(f"[worker] PayU error #{payu_consecutive_errors}: {raw}")
+                                if payu_consecutive_errors >= MAX_PAYU_CONSECUTIVE_ERRORS:
+                                    await self.safe_send_message(
+                                        chat_id,
+                                        f"⚠️ <b>PayU bot unreachable</b> — 5 consecutive errors:\n"
+                                        f"<code>{raw[:120]}</code>\n\n"
+                                        "Job stopped. Fix the checker session and retry.",
+                                        parse_mode='html'
+                                    )
+                                    job['stop'] = True
+                                    break
+                            else:
+                                payu_consecutive_errors = 0  # reset on any real response
                             if self.is_approved(raw):
                                 is_charged = self.is_charged_response(raw)
                                 if gateway == 'stripe':
