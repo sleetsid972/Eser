@@ -3450,6 +3450,76 @@ class CardCheckerBot:
             except Exception as e:
                 await status_msg.edit(f"❌ Error testing sites: <code>{str(e)[:100]}</code>", parse_mode='html')
 
+        # ━━━━━━ /api_status — Quick Flask API health check (admin only) ━━━━━━
+        @self.bot_client.on(events.NewMessage(pattern=r'/api_status'))
+        async def api_status_cmd(event):
+            if event.sender_id not in ADMINS:
+                return
+            msg = await event.reply("🔄 Pinging Flask API...", parse_mode='html')
+            import time as _time
+            start = _time.time()
+            try:
+                session = await self.get_http_session()
+                # Use the configured test card and a known Shopify test site (myshopify.com)
+                params = {"site": "https://shopify.com", "cc": SHOPIFY_TEST_CARD}
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with session.get(SHOPIFY_API_URL, params=params, timeout=timeout) as resp:
+                    elapsed = _time.time() - start
+                    if resp.status == 200:
+                        try:
+                            data = await resp.json()
+                        except Exception:
+                            data = {}
+                        api_response = data.get("Response", "—")
+                        api_gateway = data.get("Gateway", "—")
+                        await msg.edit(
+                            "╔══════════════════════════════╗\n"
+                            "║   ⚡ API STATUS CHECK          ║\n"
+                            "╚══════════════════════════════╝\n\n"
+                            f"🟢 <b>API is UP</b>\n"
+                            f"🌐 URL: <code>{SHOPIFY_API_URL}</code>\n"
+                            f"⏱ Latency: <code>{elapsed:.2f}s</code>\n"
+                            f"📨 Response: <code>{api_response}</code>\n"
+                            f"🔗 Gateway: <code>{api_gateway}</code>",
+                            parse_mode='html'
+                        )
+                    else:
+                        elapsed = _time.time() - start
+                        error_text = await resp.text()
+                        await msg.edit(
+                            "╔══════════════════════════════╗\n"
+                            "║   ⚡ API STATUS CHECK          ║\n"
+                            "╚══════════════════════════════╝\n\n"
+                            f"🔴 <b>API returned HTTP {resp.status}</b>\n"
+                            f"🌐 URL: <code>{SHOPIFY_API_URL}</code>\n"
+                            f"⏱ Latency: <code>{elapsed:.2f}s</code>\n"
+                            f"📄 Body: <code>{error_text[:120]}</code>",
+                            parse_mode='html'
+                        )
+            except asyncio.TimeoutError:
+                elapsed = _time.time() - start
+                await msg.edit(
+                    "╔══════════════════════════════╗\n"
+                    "║   ⚡ API STATUS CHECK          ║\n"
+                    "╚══════════════════════════════╝\n\n"
+                    f"🔴 <b>API TIMEOUT</b> after {elapsed:.1f}s\n"
+                    f"🌐 URL: <code>{SHOPIFY_API_URL}</code>\n"
+                    "⚠️ API server is down or unreachable.",
+                    parse_mode='html'
+                )
+            except Exception as e:
+                elapsed = _time.time() - start
+                await msg.edit(
+                    "╔══════════════════════════════╗\n"
+                    "║   ⚡ API STATUS CHECK          ║\n"
+                    "╚══════════════════════════════╝\n\n"
+                    f"🔴 <b>API ERROR</b>\n"
+                    f"🌐 URL: <code>{SHOPIFY_API_URL}</code>\n"
+                    f"⏱ After: <code>{elapsed:.2f}s</code>\n"
+                    f"❌ Error: <code>{str(e)[:120]}</code>",
+                    parse_mode='html'
+                )
+
         # ━━━━━━ /load_working_sites — Load tested working sites (admin only) ━━━━━━
         @self.bot_client.on(events.NewMessage(pattern=r'/load_working_sites'))
         async def load_working_sites_cmd(event):
