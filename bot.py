@@ -358,7 +358,10 @@ class CardCheckerBot:
         # Slowmode: minimum seconds between cards (0 = off)
         self.slowmode_secs: float = 0.0
 
-        # BIN cache max size to prevent memory leaks
+        # Per-domain test cooldown tracking (20–30s between tests of same domain)
+        self._domain_test_cooldowns: Dict[str, float] = {}
+
+        # BIN cache max size to prevent memory leaks (FIFO via insertion-ordered dict)
         self._bin_cache_max = 2000
 
     # ═══════════════ Rate Limiting ═══════════════
@@ -1630,13 +1633,14 @@ class CardCheckerBot:
         domain = shop_url.replace("https://","").replace("http://","").split("/")[0]
         # Per-domain cooldown enforcement (20-30s between tests of same domain)
         now = time.time()
-        cooldown_attr = f"_test_cooldown_{hash(domain) & 0xFFFF}"
-        last_test = getattr(self, cooldown_attr, 0)
+        if not hasattr(self, '_domain_test_cooldowns'):
+            self._domain_test_cooldowns: Dict[str, float] = {}
+        last_test = self._domain_test_cooldowns.get(domain, 0)
         if now - last_test < DOMAIN_TEST_COOLDOWN_MIN:
             wait = DOMAIN_TEST_COOLDOWN_MIN + random.uniform(0, DOMAIN_TEST_COOLDOWN_MAX - DOMAIN_TEST_COOLDOWN_MIN) - (now - last_test)
             if wait > 0:
                 await asyncio.sleep(wait)
-        setattr(self, cooldown_attr, time.time())
+        self._domain_test_cooldowns[domain] = time.time()
         """Test a single site by sending a test card to the Flask API.
         A site is WORKING if the API returns any real payment gateway response
         (e.g. CARD_DECLINED, INSUFFICIENT_FUNDS, etc.).

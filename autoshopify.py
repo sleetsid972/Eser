@@ -1258,8 +1258,8 @@ def shopify_checker():
             cc_parts = parse_cc_string(cc_string)
             cc = cc_parts["cc"]; mes = cc_parts["mes"]
             ano = cc_parts["ano"]; cvv = cc_parts["cvv"]
-        except ValueError as e:
-            return jsonify({"error": str(e), "status": False}), 400
+        except ValueError:
+            return jsonify({"error": "Invalid CC format. Use CC|MM|YYYY|CVV", "status": False}), 400
 
         variant_id = request.args.get("variant")
         proxy_str = request.args.get("proxy")
@@ -1280,7 +1280,8 @@ def shopify_checker():
             message = "TIMEOUT"; success = False
             gateway = "TIMEOUT"; price = "0.0"; currency = "USD"
         except Exception as exc:
-            message = f"ERROR: {exc}"; success = False
+            _log.error("Card processing error domain=%s: %s", domain, exc)
+            message = "ERROR"; success = False
             gateway = "ERROR"; price = "0.0"; currency = "USD"
 
         clean_response = extract_clean_response(message)
@@ -1314,8 +1315,8 @@ def shopify_checker():
             _metrics["queued"] = max(0, _metrics["queued"] - 1)
             _metrics["failure"] += 1
         _log.exception("Unhandled error domain=%s: %s", domain, e)
-        return jsonify({"error": str(e), "status": False, "Gateway": "UNKNOWN",
-                        "Price": 0.0, "Response": f"ERROR: {str(e)}", "cc": cc_string}), 500
+        return jsonify({"error": "Internal server error", "status": False, "Gateway": "UNKNOWN",
+                        "Price": 0.0, "Response": "ERROR", "cc": cc_string}), 500
 
 
 @app.route("/health", methods=["GET"])
