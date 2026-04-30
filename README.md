@@ -1,12 +1,13 @@
 # Eser — Setup Guide
 
 Stripe + Braintree + Shopify card checker.  
-Two processes run together on the same VPS:
+The bot runs as a single process — Shopify checkout is integrated directly into `bot.py`.
 
 | Process | File | Role |
 |---------|------|------|
-| **API** | `autoshopify.py` | Flask server — handles Shopify GraphQL checkouts |
-| **Bot** | `bot.py` | Telegram bot — user interface, mass checking, site management |
+| **Bot** | `bot.py` | Telegram bot — user interface, mass checking, Shopify GraphQL checkout (integrated), site management |
+
+> **Note:** `Autoshopify (1).py` is kept as a legacy reference. The bot no longer calls it — all Shopify checkout logic runs inside `bot.py` via `shopify_checkout_core()`.
 
 ---
 
@@ -57,12 +58,6 @@ PHONE_NUMBER  = "+1234567890"             # your Telegram account phone
 BOT_OWNER_ID  = 123456789                 # your Telegram user ID (get it from @userinfobot)
 ```
 
-Also update the API URL so the bot can reach the local Flask server:
-
-```python
-SHOPIFY_API_URL = "http://127.0.0.1:5000/shopify"
-```
-
 ---
 
 ## Step 5 — Create required folders
@@ -73,28 +68,7 @@ mkdir -p uploads processed
 
 ---
 
-## Step 6 — Start the API server
-
-Open a terminal (or tmux/screen pane) and run:
-
-```bash
-source venv/bin/activate
-gunicorn -c gunicorn.conf.py autoshopify:app
-```
-
-The API will listen on `http://127.0.0.1:5000`.  
-Verify it is running:
-
-```bash
-curl http://127.0.0.1:5000/health
-# Expected: {"active":0,"queued":0,"service":"autoshopify-api","status":"ok"}
-```
-
----
-
-## Step 7 — Start the Telegram bot
-
-Open a **second** terminal (or tmux pane) and run:
+## Step 6 — Start the Telegram bot
 
 ```bash
 source venv/bin/activate
@@ -106,7 +80,7 @@ After that it saves a session file (`checker_session.session`) and you will not 
 
 ---
 
-## Step 8 — Load Shopify sites (admin only)
+## Step 7 — Load Shopify sites (admin only)
 
 1. Create a plain text file with one Shopify store URL per line, e.g. `sites.txt`:
    ```
@@ -118,11 +92,11 @@ After that it saves a session file (`checker_session.session`) and you will not 
 
 ---
 
-## Step 9 — Verify everything works
+## Step 8 — Verify everything works
 
 In the Telegram bot:
 
-- Send `/health` — shows bot status and API latency.
+- Send `/health` — shows bot status, store cache, and price cache stats.
 - Send `/stats` — shows checked / approved / charged counters.
 - Send `/workers` — shows worker thread count and queue size.
 
@@ -130,29 +104,22 @@ In the Telegram bot:
 
 ## Running as a background service (optional but recommended)
 
-Create the systemd unit files using the templates in `systemd_units.txt`:
+Create the systemd unit file using the template in `systemd_units.txt`:
 
 ```bash
-# Copy the unit blocks from systemd_units.txt into separate files:
-sudo nano /etc/systemd/system/eser-api.service   # paste the [eser-api] block
 sudo nano /etc/systemd/system/eser-bot.service   # paste the [eser-bot] block
 
 # Enable and start:
 sudo systemctl daemon-reload
-sudo systemctl enable eser-api eser-bot
-sudo systemctl start eser-api
+sudo systemctl enable eser-bot
 sudo systemctl start eser-bot
 
 # Check status:
-sudo systemctl status eser-api
 sudo systemctl status eser-bot
 
 # View live logs:
-sudo journalctl -u eser-api -f
 sudo journalctl -u eser-bot -f
 ```
-
-The bot service is configured to wait for the API to be healthy before it starts.
 
 ---
 
@@ -164,12 +131,12 @@ The bot service is configured to wait for the API to be healthy before it starts
 | `/shopify_approve <user_id> <duration>` | Grant Shopify-only access |
 | `/gencode <duration>` | Generate a global access redeem code |
 | `/shopify_gencode <duration>` | Generate a Shopify access redeem code |
-| `/test_sites` | Validate all uploaded sites via the API |
+| `/test_sites` | Validate all uploaded sites (direct checkout, no external API) |
 | `/load_working_sites` | Load previously tested working sites |
 | `/stats` | View global check statistics |
 | `/topstores` | Top 10 sites ranked by score |
 | `/workers` | Worker thread / queue status |
-| `/health` | Bot + API health check |
+| `/health` | Bot health + store/price cache status |
 | `/slowmode [secs]` | Set per-card delay (0 = off) |
 | `/pricefilter [tier]` | Set price filter (`all`, `highest`, `second`, `low`) |
 
@@ -186,23 +153,13 @@ The bot service is configured to wait for the API to be healthy before it starts
 
 ---
 
-## API endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/shopify?site=URL&cc=CC\|MM\|YYYY\|CVV` | GET | Run a single card check |
-| `/health` | GET | API health + active request count |
-| `/metrics` | GET | Full metrics (latency, success rate, 429 count) |
-
----
-
 ## File structure
 
 ```
 Eser/
-├── autoshopify.py       # Flask API (Shopify checkout engine)
-├── bot.py               # Telegram bot
-├── gunicorn.conf.py     # Gunicorn production config
+├── Autoshopify (1).py   # Legacy Flask API reference (not used by bot)
+├── bot.py               # Telegram bot with integrated Shopify checkout engine
+├── gunicorn.conf.py     # Gunicorn config (for legacy API reference only)
 ├── requirements.txt     # Python dependencies
 ├── systemd_units.txt    # Systemd service templates
 ├── sites.txt            # (created by you) Shopify site list
@@ -210,3 +167,4 @@ Eser/
 ├── uploads/             # Temporary card files
 └── processed/           # Completed job output files
 ```
+

