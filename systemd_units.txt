@@ -7,9 +7,9 @@
 #    sudo systemctl start eser-bot
 # ══════════════════════════════════════════════════════════════════
 #
-# ── eser-api.service ────────────────────────────────────────────
+# ── eser-api.service  (shopify_api_fast.py aiohttp server) ───────
 # [Unit]
-# Description=Eser Shopify API (Gunicorn)
+# Description=Eser Shopify API Fast (aiohttp)
 # After=network.target
 # Wants=network-online.target
 #
@@ -17,7 +17,7 @@
 # User=ubuntu
 # WorkingDirectory=/home/ubuntu/Eser
 # Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
-# ExecStart=/home/ubuntu/Eser/venv/bin/gunicorn -c gunicorn.conf.py autoshopify:app
+# ExecStart=/home/ubuntu/Eser/venv/bin/python3 shopify_api_fast.py
 # Restart=always
 # RestartSec=5
 # CPUQuota=200%
@@ -30,13 +30,15 @@
 # ── eser-bot.service ────────────────────────────────────────────
 # [Unit]
 # Description=Eser Telegram Bot
-# After=network.target
+# After=network.target eser-api.service
 # Wants=network-online.target
+# Requires=eser-api.service
 #
 # [Service]
 # User=ubuntu
 # WorkingDirectory=/home/ubuntu/Eser
 # Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+# ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:5001/health; do sleep 2; done'
 # ExecStart=/home/ubuntu/Eser/venv/bin/python3 bot.py
 # Restart=always
 # RestartSec=10
@@ -46,3 +48,4 @@
 #
 # [Install]
 # WantedBy=multi-user.target
+

