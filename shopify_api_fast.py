@@ -1064,6 +1064,27 @@ async def _get_domain_sem(domain: str) -> asyncio.Semaphore:
         return _domain_sems[domain]
 
 
+def _is_safe_site_url(url: str) -> bool:
+    """Reject requests targeting private/loopback addresses to prevent SSRF."""
+    import ipaddress
+    try:
+        parsed = urlparse(url if url.startswith("http") else f"https://{url}")
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname
+        if not host:
+            return False
+        try:
+            addr = ipaddress.ip_address(host)
+            if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                return False
+        except ValueError:
+            pass  # hostname, not raw IP — acceptable
+        return True
+    except Exception:
+        return False
+
+
 # ── Request handlers ──────────────────────────────────────────────────────────
 
 async def handle_shopify(request: web.Request) -> web.Response:
@@ -1078,6 +1099,8 @@ async def handle_shopify(request: web.Request) -> web.Response:
 
     if not site:
         return web.json_response({"Status": False, "Response": "Missing 'site' parameter"}, status=400)
+    if not _is_safe_site_url(site):
+        return web.json_response({"Status": False, "Response": "Invalid or unsafe site URL"}, status=400)
     if not cc_string:
         return web.json_response({"Status": False, "Response": "Missing 'cc' parameter"}, status=400)
 
@@ -1146,11 +1169,9 @@ async def handle_shopify(request: web.Request) -> web.Response:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /health — returns server health status."""
-    remaining = _global_sem._value if _global_sem else MAX_CONCURRENT_CHECKS
-    active = MAX_CONCURRENT_CHECKS - remaining
     return web.json_response({
         "status": "ok",
-        "active": active,
+        "active": _active_count,
         "max": MAX_CONCURRENT_CHECKS,
         "domain_semaphores": len(_domain_sems)
     })
