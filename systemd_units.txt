@@ -2,9 +2,55 @@
 #  Systemd unit files for production deployment
 #  Place in /etc/systemd/system/ and run:
 #    sudo systemctl daemon-reload
-#    sudo systemctl enable eser-api eser-bot
-#    sudo systemctl start eser-api
+#    sudo systemctl enable old-api-server eser-bot
+#    sudo systemctl start old-api-server
 #    sudo systemctl start eser-bot
+# ══════════════════════════════════════════════════════════════════
+#
+# ── old-api-server.service  (old_api_server.py – trusted process_card engine) ─
+# [Unit]
+# Description=Eser Old API Server (trusted Autoshopify process_card engine)
+# After=network.target
+# Wants=network-online.target
+#
+# [Service]
+# User=ubuntu
+# WorkingDirectory=/home/ubuntu/Eser
+# Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+# ExecStart=/home/ubuntu/Eser/venv/bin/python3 old_api_server.py
+# Restart=always
+# RestartSec=5
+# CPUQuota=200%
+# MemoryMax=8G
+# LimitNOFILE=65535
+#
+# [Install]
+# WantedBy=multi-user.target
+#
+# ── eser-bot.service ────────────────────────────────────────────
+# [Unit]
+# Description=Eser Telegram Bot
+# After=network.target old-api-server.service
+# Wants=network-online.target
+# Requires=old-api-server.service
+#
+# [Service]
+# User=ubuntu
+# WorkingDirectory=/home/ubuntu/Eser
+# Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+# ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:5000/health; do sleep 2; done'
+# ExecStart=/home/ubuntu/Eser/venv/bin/python3 bot.py
+# Restart=always
+# RestartSec=10
+# CPUQuota=180%
+# MemoryMax=6G
+# LimitNOFILE=65535
+#
+# [Install]
+# WantedBy=multi-user.target
+#
+# ══════════════════════════════════════════════════════════════════
+#  Legacy units (shopify_api_fast.py – kept for reference)
 # ══════════════════════════════════════════════════════════════════
 #
 # ── eser-api.service  (shopify_api_fast.py aiohttp server) ───────
@@ -22,28 +68,6 @@
 # RestartSec=5
 # CPUQuota=200%
 # MemoryMax=8G
-# LimitNOFILE=65535
-#
-# [Install]
-# WantedBy=multi-user.target
-#
-# ── eser-bot.service ────────────────────────────────────────────
-# [Unit]
-# Description=Eser Telegram Bot
-# After=network.target eser-api.service
-# Wants=network-online.target
-# Requires=eser-api.service
-#
-# [Service]
-# User=ubuntu
-# WorkingDirectory=/home/ubuntu/Eser
-# Environment="PATH=/home/ubuntu/Eser/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
-# ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:5001/health; do sleep 2; done'
-# ExecStart=/home/ubuntu/Eser/venv/bin/python3 bot.py
-# Restart=always
-# RestartSec=10
-# CPUQuota=180%
-# MemoryMax=6G
 # LimitNOFILE=65535
 #
 # [Install]

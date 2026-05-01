@@ -61,7 +61,7 @@ FORWARD_CHAT_ID = BOT_OWNER_ID
 
 BIN_API_URL = "https://lookup.binlist.net/{}"
 
-SHOPIFY_API_URL = "http://127.0.0.1:5001/shopify"   # local shopify_api_fast.py server
+SHOPIFY_API_URL = "http://127.0.0.1:5000/shopify"   # local old_api_server.py (trusted engine)
 SITES_FILE = "sites.txt"
 PROXY_VALIDATION_TIMEOUT = 8
 PROXY_VALIDATION_RETRIES = 1
@@ -91,7 +91,7 @@ MAX_PAYU_CONSECUTIVE_ERRORS = 5    # Stop mass job after this many consecutive P
 SITE_TEST_RETRIES = 2              # Retries for 503/timeout during site testing
 SITE_TEST_RETRY_DELAY = 5          # Seconds between site test retries
 SITE_TEST_CONCURRENCY_LIMIT = 20   # VPS-tuned: 4 vCPU / 31 GB
-MAX_CONCURRENT_CHECKS = 15          # conservative for 2-core 8GB VPS
+MAX_CONCURRENT_CHECKS = 5           # conservative for 2-core 8GB VPS (API has own limit of 10)
 POLL_DELAYS = [0.5, 1.0, 2.0, 4.0]
 POLL_TIMEOUT = 8.0
 DOMAIN_CONCURRENCY_LIMIT = 2
@@ -901,9 +901,9 @@ class CardCheckerBot:
                     logger.info(f"Site {url} → DEAD (no products/collections)")
                     return False
 
-                # 5) Direct gateway check via integrated shopify_checkout_core
+                # 5) Direct gateway check via local API (old_api_server.py)
                 try:
-                    result = await self.shopify_checkout_core(test_card, base)
+                    result = await self.run_shopify_graphql_checkout(test_card, base)
                     if result.site_dead:
                         logger.info(f"Site {url} → DEAD ({result.status_code or result.error_msg})")
                         return False
@@ -2364,16 +2364,21 @@ class CardCheckerBot:
 
     async def run_shopify_graphql_checkout(self, card_line: str, shop_url: str,
                                             proxy_str: Optional[str] = None) -> ShopifyCheckResult:
-        """Run Shopify checkout: tries local API first, falls back to inline engine."""
+        """Run Shopify checkout via local API only. No inline fallback."""
         start_time = time.time()
         site_name = shop_url.replace("https://", "").replace("http://", "")
         try:
             async with self._checkout_semaphore:
-                # Try the local aiohttp API first
                 result = await self._shopify_via_http_api(card_line, shop_url, proxy_str)
                 if result is None:
-                    # API not reachable — use the embedded inline engine
-                    result = await self.shopify_checkout_core(card_line, shop_url, proxy_str)
+                    # API is unreachable – return a retryable error, do NOT use inline engine
+                    return ShopifyCheckResult(
+                        card=card_line, status=ShopifyCheckStatus.ERROR,
+                        status_code="API_UNREACHABLE", site_name=site_name,
+                        shop_url=shop_url, gateway="SHOPIFY",
+                        error_msg="Local API (old_api_server.py) is not running on port 5000",
+                        retryable=True, site_dead=False,
+                    )
             elapsed_ms = (time.time() - start_time) * 1000
             sc = self.site_scores.setdefault(site_name, SiteScore(site=site_name))
             sc.total += 1
@@ -2602,7 +2607,7 @@ class CardCheckerBot:
                 self._site_variant_cache[shop_url] = variant_id
             if price > 0:
                 self._site_price_cache[shop_url] = price
-            result = await self.shopify_checkout_core(SHOPIFY_TEST_CARD, shop_url)
+            result = await self.run_shopify_graphql_checkout(SHOPIFY_TEST_CARD, shop_url)
             elapsed = time.time() - start_time
             if result.captcha:
                 out["captcha"] = True
