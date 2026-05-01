@@ -1036,7 +1036,7 @@ except ImportError:
 # ── Server configuration ──────────────────────────────────────────────────────
 HOST = "0.0.0.0"
 PORT = 5001                         # port bot.py calls
-MAX_CONCURRENT_CHECKS = 50          # global in-flight limit
+MAX_CONCURRENT_CHECKS = 30          # global in-flight limit (conservative for 2-core VPS)
 MAX_DOMAIN_CONCURRENT = 2           # per-domain limit
 REQUEST_TIMEOUT_SECS = 35           # total timeout per /shopify call (secs)
 
@@ -1120,18 +1120,23 @@ async def handle_shopify(request: web.Request) -> web.Response:
     domain_sem = await _get_domain_sem(domain)
     start = time.time()
 
+    async def _do_checkout():
+        global _active_count
+        async with _global_sem:
+            async with domain_sem:
+                _active_count += 1
+                try:
+                    return await process_card(
+                        cc, mes, ano, cvv, site, variant_id, proxy_str,
+                        _connector=_shared_connector
+                    )
+                finally:
+                    _active_count -= 1
+
     try:
-        async with asyncio.timeout(REQUEST_TIMEOUT_SECS):
-            async with _global_sem:
-                async with domain_sem:
-                    _active_count += 1
-                    try:
-                        success, message, gateway, price, currency = await process_card(
-                            cc, mes, ano, cvv, site, variant_id, proxy_str,
-                            _connector=_shared_connector
-                        )
-                    finally:
-                        _active_count -= 1
+        success, message, gateway, price, currency = await asyncio.wait_for(
+            _do_checkout(), timeout=REQUEST_TIMEOUT_SECS
+        )
     except asyncio.TimeoutError:
         elapsed = time.time() - start
         logger.warning(f"[{domain}] TIMEOUT after {elapsed:.1f}s")

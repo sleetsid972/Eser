@@ -91,10 +91,10 @@ MAX_PAYU_CONSECUTIVE_ERRORS = 5    # Stop mass job after this many consecutive P
 SITE_TEST_RETRIES = 2              # Retries for 503/timeout during site testing
 SITE_TEST_RETRY_DELAY = 5          # Seconds between site test retries
 SITE_TEST_CONCURRENCY_LIMIT = 20   # VPS-tuned: 4 vCPU / 31 GB
-MAX_CONCURRENT_CHECKS = 60
+MAX_CONCURRENT_CHECKS = 15          # conservative for 2-core 8GB VPS
 POLL_DELAYS = [0.5, 1.0, 2.0, 4.0]
 POLL_TIMEOUT = 8.0
-DOMAIN_CONCURRENCY_LIMIT = 5
+DOMAIN_CONCURRENCY_LIMIT = 2
 CAPTCHA_CIRCUIT_BREAKER_THRESHOLD = 3
 CAPTCHA_CIRCUIT_BREAKER_COOLDOWN = 30
 CACHE_REFRESH_INTERVAL_HOURS = 4
@@ -323,7 +323,7 @@ class CardCheckerBot:
         self.shopify_redeem_codes: Dict[str, Optional[datetime]] = {}
 
         self.active_jobs: Dict[str, dict] = {}
-        self.task_queue = asyncio.Queue(maxsize=500)   # bounded — returns overload error if full
+        self.task_queue = asyncio.Queue()   # unbounded — avoids deadlock under high load
         self.retry_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self.worker_tasks: List[asyncio.Task] = []
 
