@@ -946,7 +946,7 @@ async def process_card(cc, mes, ano, cvv, site_url, variant_id=None, proxy_str=N
                 )
                 
                 if is_captcha_required(final_text):
-                    return True, "CARD_DECLINED", gateway, total_price, currency
+                    return False, "CAPTCHA_REQUIRED", gateway, total_price, currency
                 
                 try:
                     poll_json = json.loads(final_text)
@@ -965,11 +965,11 @@ async def process_card(cc, mes, ano, cvv, site_url, variant_id=None, proxy_str=N
                                 msg = error.get('messageUntranslated', '')
                                 # If code is generic, prefer the untranslated message for the real decline reason
                                 if code in ('GENERIC_ERROR', 'PAYMENT_FAILED', '') and msg:
-                                    return True, msg, gateway, total_price, currency
-                                return True, code if code else 'PAYMENT_FAILED', gateway, total_price, currency
+                                    return False, msg, gateway, total_price, currency
+                                return False, code if code else 'PAYMENT_FAILED', gateway, total_price, currency
                             # Handle other error types
                             code = error.get('code') or error_type or 'UNKNOWN_ERROR'
-                            return True, code, gateway, total_price, currency
+                            return False, code, gateway, total_price, currency
                         elif typename == 'ActionRequiredReceipt':
                             return True, "OTP_REQUIRED", gateway, total_price, currency
                         
@@ -986,7 +986,7 @@ async def process_card(cc, mes, ano, cvv, site_url, variant_id=None, proxy_str=N
                     break
             
             if 'CAPTCHA_REQUIRED' in final_text:
-                return True, "CARD_DECLINED", gateway, total_price, currency
+                return False, "CAPTCHA_REQUIRED", gateway, total_price, currency
             
             if 'WaitingReceipt' in final_text:
                 return False, "Change Proxy or Site", gateway, total_price, currency
@@ -998,9 +998,9 @@ async def process_card(cc, mes, ano, cvv, site_url, variant_id=None, proxy_str=N
                 if "shopify_payments" in str(res_json):
                     return True, "ORDER_PLACED", gateway, total_price, currency
                 elif result:
-                    return True, result, gateway, total_price, currency
+                    return False, result, gateway, total_price, currency
                 else:
-                    return True, "MISMATCHED_BILL", gateway, total_price, currency
+                    return False, "MISMATCHED_BILL", gateway, total_price, currency
             except:
                 pass
             
@@ -1012,7 +1012,7 @@ async def process_card(cc, mes, ano, cvv, site_url, variant_id=None, proxy_str=N
             elif 'processedreceipt' in final_lower:
                 return True, f"ORDER_PLACED", gateway, total_price, currency
             elif 'failedreceipt' in final_lower or 'declined' in final_lower:
-                return True, code if code else "CARD_DECLINED", gateway, total_price, currency
+                return False, code if code else "CARD_DECLINED", gateway, total_price, currency
             else:
                 return False, f"Unknown Result", gateway, total_price, currency
 
